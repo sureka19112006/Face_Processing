@@ -1,8 +1,21 @@
 import streamlit as st
 import numpy as np
-from PIL import Image, ImageDraw, ImageFilter
+from PIL import Image, ImageDraw
 import math
 import time
+import cv2
+
+# ============================================================
+# OPTIONAL / ACTUAL AI LIBRARIES
+# ============================================================
+
+try:
+    from deepface import DeepFace
+    DEEPFACE_AVAILABLE = True
+except Exception:
+    DeepFace = None
+    DEEPFACE_AVAILABLE = False
+
 
 # ============================================================
 # PAGE CONFIG
@@ -14,6 +27,7 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="collapsed"
 )
+
 
 # ============================================================
 # CUSTOM CSS
@@ -42,8 +56,6 @@ html, body, [class*="css"] {
     padding-bottom: 4rem;
 }
 
-/* Main title */
-
 .main-title {
     text-align: center;
     padding: 25px 20px 10px 20px;
@@ -64,8 +76,6 @@ html, body, [class*="css"] {
     margin-top: 8px;
 }
 
-/* Section headings */
-
 .section-title {
     margin-top: 30px;
     margin-bottom: 15px;
@@ -75,8 +85,6 @@ html, body, [class*="css"] {
     border-left: 5px solid #ff987c;
     padding-left: 15px;
 }
-
-/* Cards */
 
 .card {
     background: linear-gradient(
@@ -127,8 +135,6 @@ html, body, [class*="css"] {
     overflow-x: auto;
 }
 
-/* Operation cards */
-
 .operation-card {
     background: linear-gradient(
         135deg,
@@ -151,8 +157,6 @@ html, body, [class*="css"] {
     color: #bfa9bd;
     font-size: 12px;
 }
-
-/* Calculation cards */
 
 .calc-card {
     background:
@@ -189,8 +193,6 @@ html, body, [class*="css"] {
     line-height: 1.6;
 }
 
-/* Image labels */
-
 .image-label {
     text-align: center;
     font-family: 'Playfair Display', serif;
@@ -198,8 +200,6 @@ html, body, [class*="css"] {
     font-size: 20px;
     margin-bottom: 10px;
 }
-
-/* Pixel lens */
 
 .pixel-box {
     background: #09080a;
@@ -226,8 +226,6 @@ html, body, [class*="css"] {
     box-sizing: border-box;
 }
 
-/* Buttons */
-
 .stButton > button {
     background: linear-gradient(
         135deg,
@@ -250,8 +248,6 @@ html, body, [class*="css"] {
     );
 }
 
-/* File uploader */
-
 [data-testid="stFileUploader"] {
     background: rgba(30,18,30,0.75);
     border: 1px dashed rgba(255,154,126,0.5);
@@ -259,14 +255,10 @@ html, body, [class*="css"] {
     padding: 10px;
 }
 
-/* Select box */
-
 [data-baseweb="select"] > div {
     background-color: #17101a;
     border-color: rgba(255,154,126,0.35);
 }
-
-/* Footer */
 
 .footer {
     text-align: center;
@@ -317,10 +309,6 @@ INTERACTIVE COMPUTER VISION • IMAGE ANALYSIS • FACE REPRESENTATION
 # ============================================================
 
 def load_default_image():
-    """
-    Uses scikit-image's built-in astronaut photograph.
-    This is a real human photograph included with scikit-image.
-    """
 
     try:
         from skimage import data
@@ -331,20 +319,36 @@ def load_default_image():
 
     except Exception:
 
-        # Fallback if scikit-image is unavailable
-        # Creates a simple face-like image so application still runs.
+        img = Image.new(
+            "RGB",
+            (512, 512),
+            "#d8b09c"
+        )
 
-        img = Image.new("RGB", (512, 512), "#d8b09c")
         draw = ImageDraw.Draw(img)
 
-        draw.ellipse((130, 90, 380, 390), fill="#d39b7c")
+        draw.ellipse(
+            (130, 90, 380, 390),
+            fill="#d39b7c"
+        )
 
-        draw.ellipse((190, 180, 220, 210), fill="#241c1b")
-        draw.ellipse((290, 180, 320, 210), fill="#241c1b")
+        draw.ellipse(
+            (190, 180, 220, 210),
+            fill="#241c1b"
+        )
 
-        draw.arc((200, 230, 310, 320), 0, 180, fill="#4b2525", width=8)
+        draw.ellipse(
+            (290, 180, 320, 210),
+            fill="#241c1b"
+        )
 
-        draw.arc((90, 30, 420, 460), 180, 360, fill="#2a1c1d", width=55)
+        draw.arc(
+            (200, 230, 310, 320),
+            0,
+            180,
+            fill="#4b2525",
+            width=8
+        )
 
         return img
 
@@ -354,6 +358,7 @@ def pil_to_array(img):
 
 
 def gray_array(img):
+
     arr = pil_to_array(img).astype(np.float32)
 
     gray = (
@@ -369,159 +374,104 @@ def resize_for_processing(img, max_size=640):
 
     w, h = img.size
 
-    scale = min(1.0, max_size / max(w, h))
+    scale = min(
+        1.0,
+        max_size / max(w, h)
+    )
 
     if scale < 1:
+
         img = img.resize(
-            (int(w * scale), int(h * scale)),
+            (
+                int(w * scale),
+                int(h * scale)
+            ),
             Image.Resampling.LANCZOS
         )
 
     return img
 
 
-# ============================================================
-# FACE REGION ESTIMATION
-# ============================================================
+def pil_to_bgr(img):
 
-def estimate_face_region(img):
-
-    """
-    Lightweight face-region estimation.
-
-    This intentionally does NOT use cv2.CascadeClassifier.
-    Therefore it works even when OpenCV installation is broken.
-    """
-
-    w, h = img.size
-
-    # Central face region
-    x1 = int(w * 0.20)
-    y1 = int(h * 0.12)
-
-    x2 = int(w * 0.80)
-    y2 = int(h * 0.82)
-
-    return x1, y1, x2, y2
-
-
-def draw_face_box(img):
-
-    result = img.copy()
-
-    draw = ImageDraw.Draw(result)
-
-    x1, y1, x2, y2 = estimate_face_region(img)
-
-    draw.rounded_rectangle(
-        (x1, y1, x2, y2),
-        radius=12,
-        outline="#ff806f",
-        width=5
+    rgb = np.array(
+        img.convert("RGB")
     )
 
-    draw.text(
-        (x1 + 10, y1 + 10),
-        "FACE ROI",
-        fill="#ffd2c2"
+    return cv2.cvtColor(
+        rgb,
+        cv2.COLOR_RGB2BGR
     )
-
-    return result
 
 
 # ============================================================
 # TEMPLATE MATCHING
 # ============================================================
 
-def normalized_template_matching(img):
+def actual_template_matching(
+    image,
+    template
+):
 
-    gray = gray_array(img)
-
-    h, w = gray.shape
-
-    # Template = central face region
-    x1, y1, x2, y2 = estimate_face_region(img)
-
-    template = gray[y1:y2, x1:x2]
-
-    # Search smaller image regions.
-    # This avoids expensive full-image matching.
-
-    target_h = max(20, int(template.shape[0] * 0.65))
-    target_w = max(20, int(template.shape[1] * 0.65))
-
-    if target_h >= h or target_w >= w:
-        target_h = max(20, h // 3)
-        target_w = max(20, w // 3)
-
-    template_small = np.array(
-        Image.fromarray(template.astype(np.uint8)).resize(
-            (target_w, target_h)
-        ),
-        dtype=np.float32
+    image_gray = cv2.cvtColor(
+        pil_to_bgr(image),
+        cv2.COLOR_BGR2GRAY
     )
 
-    # Search using a grid
-    best_score = -1
-    best_x = 0
-    best_y = 0
+    template_gray = cv2.cvtColor(
+        pil_to_bgr(template),
+        cv2.COLOR_BGR2GRAY
+    )
 
-    step_y = max(4, target_h // 8)
-    step_x = max(4, target_w // 8)
+    ih, iw = image_gray.shape
+    th, tw = template_gray.shape
 
-    # Use resized whole image for matching
-    search = gray
+    # Template must be smaller than input
+    if th > ih or tw > iw:
 
-    for y in range(0, max(1, h - target_h), step_y):
+        scale = min(
+            (iw - 2) / tw,
+            (ih - 2) / th
+        )
 
-        for x in range(0, max(1, w - target_w), step_x):
-
-            patch = search[
-                y:y + target_h,
-                x:x + target_w
-            ]
-
-            if patch.shape != template_small.shape:
-                continue
-
-            a = patch.flatten()
-            b = template_small.flatten()
-
-            a_mean = a.mean()
-            b_mean = b.mean()
-
-            numerator = np.sum(
-                (a - a_mean) * (b - b_mean)
+        if scale <= 0:
+            raise ValueError(
+                "Template image is too large."
             )
 
-            denominator = math.sqrt(
-                np.sum((a - a_mean) ** 2)
-                *
-                np.sum((b - b_mean) ** 2)
-            )
+        template_gray = cv2.resize(
+            template_gray,
+            (
+                max(1, int(tw * scale)),
+                max(1, int(th * scale))
+            ),
+            interpolation=cv2.INTER_AREA
+        )
 
-            score = (
-                numerator / denominator
-                if denominator != 0
-                else 0
-            )
+        th, tw = template_gray.shape
 
-            if score > best_score:
+    result = cv2.matchTemplate(
+        image_gray,
+        template_gray,
+        cv2.TM_CCOEFF_NORMED
+    )
 
-                best_score = score
-                best_x = x
-                best_y = y
+    min_val, max_val, min_loc, max_loc = cv2.minMaxLoc(
+        result
+    )
 
-    output = img.copy()
+    output = image.copy()
 
     draw = ImageDraw.Draw(output)
 
+    x, y = max_loc
+
     draw.rectangle(
         (
-            best_x,
-            best_y,
-            best_x + target_w,
-            best_y + target_h
+            x,
+            y,
+            x + tw,
+            y + th
         ),
         outline="#ff806f",
         width=5
@@ -529,20 +479,90 @@ def normalized_template_matching(img):
 
     draw.text(
         (
-            best_x + 8,
-            best_y + 8
+            x + 8,
+            y + 8
         ),
-        f"MATCH {best_score:.3f}",
+        f"MATCH {max_val:.4f}",
         fill="#ffd0bf"
     )
 
     return output, {
-        "score": best_score,
-        "x": best_x,
-        "y": best_y,
-        "width": target_w,
-        "height": target_h
+        "score": float(max_val),
+        "x": int(x),
+        "y": int(y),
+        "width": int(tw),
+        "height": int(th)
     }
+
+
+# ============================================================
+# REAL VIOLA-JONES
+# ============================================================
+
+@st.cache_resource
+def load_haar_cascade():
+
+    cascade_path = cv2.data.haarcascades + \
+        "haarcascade_frontalface_default.xml"
+
+    cascade = cv2.CascadeClassifier(
+        cascade_path
+    )
+
+    if cascade.empty():
+
+        raise RuntimeError(
+            "Haar Cascade could not be loaded."
+        )
+
+    return cascade
+
+
+def viola_jones_detection(img):
+
+    bgr = pil_to_bgr(img)
+
+    gray = cv2.cvtColor(
+        bgr,
+        cv2.COLOR_BGR2GRAY
+    )
+
+    cascade = load_haar_cascade()
+
+    faces = cascade.detectMultiScale(
+        gray,
+        scaleFactor=1.1,
+        minNeighbors=5,
+        minSize=(40, 40)
+    )
+
+    output = img.copy()
+
+    draw = ImageDraw.Draw(output)
+
+    for i, (x, y, w, h) in enumerate(faces):
+
+        draw.rectangle(
+            (
+                int(x),
+                int(y),
+                int(x + w),
+                int(y + h)
+            ),
+            outline="#ff806f",
+            width=5
+        )
+
+        draw.text(
+            (
+                int(x + 8),
+                int(y + 8)
+            ),
+            f"FACE {i + 1}",
+            fill="#ffd0bf"
+        )
+
+    return output, faces
 
 
 # ============================================================
@@ -552,38 +572,67 @@ def normalized_template_matching(img):
 def integral_image(gray):
 
     return np.cumsum(
-        np.cumsum(gray, axis=0),
+        np.cumsum(
+            gray,
+            axis=0
+        ),
         axis=1
     )
 
 
-def rectangle_sum(ii, x1, y1, x2, y2):
+def rectangle_sum(
+    ii,
+    x1,
+    y1,
+    x2,
+    y2
+):
 
     h, w = ii.shape
 
-    x1 = max(0, min(w - 1, x1))
-    x2 = max(0, min(w - 1, x2))
+    x1 = max(
+        0,
+        min(w - 1, x1)
+    )
 
-    y1 = max(0, min(h - 1, y1))
-    y2 = max(0, min(h - 1, y2))
+    x2 = max(
+        0,
+        min(w - 1, x2)
+    )
+
+    y1 = max(
+        0,
+        min(h - 1, y1)
+    )
+
+    y2 = max(
+        0,
+        min(h - 1, y2)
+    )
 
     total = ii[y2, x2]
 
     if x1 > 0:
-        total -= ii[y2, x1 - 1]
+        total -= ii[
+            y2,
+            x1 - 1
+        ]
 
     if y1 > 0:
-        total -= ii[y1 - 1, x2]
+        total -= ii[
+            y1 - 1,
+            x2
+        ]
 
     if x1 > 0 and y1 > 0:
-        total += ii[y1 - 1, x1 - 1]
+
+        total += ii[
+            y1 - 1,
+            x1 - 1
+        ]
 
     return float(total)
 
-
-# ============================================================
-# VIOLA JONES
-# ============================================================
 
 def viola_jones_analysis(img):
 
@@ -591,18 +640,44 @@ def viola_jones_analysis(img):
 
     ii = integral_image(gray)
 
-    x1, y1, x2, y2 = estimate_face_region(img)
+    output, faces = viola_jones_detection(
+        img
+    )
 
-    width = x2 - x1
-    height = y2 - y1
+    if len(faces) > 0:
 
-    # Haar two-rectangle feature
-    mid_x = x1 + width // 2
+        x, y, width, height = [
+            int(v) for v in faces[0]
+        ]
+
+    else:
+
+        h, w = gray.shape
+
+        x = int(w * 0.2)
+        y = int(h * 0.12)
+
+        width = int(w * 0.6)
+        height = int(h * 0.7)
+
+    x2 = min(
+        gray.shape[1],
+        x + width
+    )
+
+    y2 = min(
+        gray.shape[0],
+        y + height
+    )
+
+    mid_x = x + (
+        x2 - x
+    ) // 2
 
     left_sum = rectangle_sum(
         ii,
-        x1,
-        y1,
+        x,
+        y,
         mid_x - 1,
         y2 - 1
     )
@@ -610,168 +685,260 @@ def viola_jones_analysis(img):
     right_sum = rectangle_sum(
         ii,
         mid_x,
-        y1,
+        y,
         x2 - 1,
         y2 - 1
     )
 
-    haar_difference = left_sum - right_sum
-
-    face_area = width * height
-
-    normalized_difference = (
-        haar_difference / face_area
+    haar_difference = (
+        left_sum -
+        right_sum
     )
 
-    output = img.copy()
+    face_area = max(
+        1,
+        (x2 - x) *
+        (y2 - y)
+    )
+
+    normalized_difference = (
+        haar_difference /
+        face_area
+    )
 
     draw = ImageDraw.Draw(output)
 
-    draw.rectangle(
-        (x1, y1, x2, y2),
-        outline="#ff806f",
-        width=5
-    )
-
     draw.line(
-        (mid_x, y1, mid_x, y2),
+        (
+            mid_x,
+            y,
+            mid_x,
+            y2
+        ),
         fill="#c28bd1",
         width=4
     )
 
     draw.text(
-        (x1 + 10, y1 + 10),
+        (
+            x + 10,
+            y + 10
+        ),
         "HAAR FEATURE",
         fill="#ffd0bf"
     )
 
     return output, {
+        "faces": len(faces),
         "left_sum": left_sum,
         "right_sum": right_sum,
         "difference": haar_difference,
         "normalized": normalized_difference,
         "area": face_area,
-        "integral_center": float(ii[y1, x1])
-    }
-
-
-# ============================================================
-# LOCAL FACE FEATURES
-# ============================================================
-
-def extract_face_features(img):
-
-    gray = gray_array(img)
-
-    x1, y1, x2, y2 = estimate_face_region(img)
-
-    roi = gray[y1:y2, x1:x2]
-
-    if roi.size == 0:
-        roi = gray
-
-    mean = float(np.mean(roi))
-    std = float(np.std(roi))
-    minimum = float(np.min(roi))
-    maximum = float(np.max(roi))
-
-    # Horizontal / vertical gradients
-    gx = np.diff(roi, axis=1)
-    gy = np.diff(roi, axis=0)
-
-    edge_strength = float(
-        np.mean(np.abs(gx)) +
-        np.mean(np.abs(gy))
-    ) / 2.0
-
-    # Symmetry
-    width = roi.shape[1]
-
-    left = roi[:, :width // 2]
-
-    right = roi[:, width - width // 2:]
-
-    right = np.fliplr(right)
-
-    min_width = min(left.shape[1], right.shape[1])
-
-    symmetry = float(
-        np.mean(
-            np.abs(
-                left[:, :min_width]
-                -
-                right[:, :min_width]
-            )
+        "integral_center": float(
+            ii[y, x]
         )
-    )
-
-    return {
-        "mean": mean,
-        "std": std,
-        "min": minimum,
-        "max": maximum,
-        "edge": edge_strength,
-        "symmetry": symmetry,
-        "roi": roi
     }
 
 
 # ============================================================
-# DEEPFACE STYLE ANALYSIS
+# DEEPFACE
 # ============================================================
 
 def deepface_analysis(img):
 
+    if not DEEPFACE_AVAILABLE:
+
+        raise RuntimeError(
+            "DeepFace is not installed. "
+            "Add deepface[tensorflow] to requirements.txt."
+        )
+
     start = time.time()
 
-    features = extract_face_features(img)
+    bgr = pil_to_bgr(img)
 
-    output = draw_face_box(img)
-
-    elapsed = time.time() - start
-
-    # Feature-based educational estimation.
-    # We do NOT claim these values are medically accurate.
-
-    mean = features["mean"]
-    std = features["std"]
-
-    estimated_age = 20 + (
-        (mean / 255.0) * 20
-        +
-        min(std / 10.0, 20)
+    analysis = DeepFace.analyze(
+        img_path=bgr,
+        actions=[
+            "age",
+            "gender",
+            "emotion",
+            "race"
+        ],
+        detector_backend="opencv",
+        enforce_detection=False,
+        align=True,
+        silent=True
     )
 
-    estimated_age = max(
-        18,
-        min(65, estimated_age)
+    if isinstance(
+        analysis,
+        dict
+    ):
+
+        analysis = [analysis]
+
+    first = analysis[0]
+
+    output = img.copy()
+
+    draw = ImageDraw.Draw(output)
+
+    face_region = first.get(
+        "region",
+        {}
     )
 
-    # Expression index
-    expression_score = (
-        features["edge"] / 50.0
+    if face_region:
+
+        x = int(
+            face_region.get(
+                "x",
+                0
+            )
+        )
+
+        y = int(
+            face_region.get(
+                "y",
+                0
+            )
+        )
+
+        w = int(
+            face_region.get(
+                "w",
+                0
+            )
+        )
+
+        h = int(
+            face_region.get(
+                "h",
+                0
+            )
+        )
+
+        draw.rectangle(
+            (
+                x,
+                y,
+                x + w,
+                y + h
+            ),
+            outline="#ff806f",
+            width=5
+        )
+
+        draw.text(
+            (
+                x + 8,
+                y + 8
+            ),
+            "DEEPFACE",
+            fill="#ffd0bf"
+        )
+
+    age = float(
+        first.get(
+            "age",
+            0
+        )
     )
 
-    expression_score = max(
-        0,
-        min(1, expression_score)
+    gender_value = first.get(
+        "dominant_gender",
+        "Unknown"
     )
 
-    if expression_score > 0.65:
-        expression = "High facial variation"
-    elif expression_score > 0.35:
-        expression = "Moderate facial variation"
+    if isinstance(
+        first.get("gender"),
+        dict
+    ):
+
+        gender_scores = first["gender"]
+
+        gender = max(
+            gender_scores,
+            key=gender_scores.get
+        )
+
     else:
-        expression = "Low facial variation"
+
+        gender = str(
+            gender_value
+        )
+
+    emotion = str(
+        first.get(
+            "dominant_emotion",
+            "Unknown"
+        )
+    )
+
+    race = str(
+        first.get(
+            "dominant_race",
+            "Unknown"
+        )
+    )
+
+    confidence = first.get(
+        "face_confidence",
+        0
+    )
+
+    if confidence is None:
+        confidence = 0
+
+    processing_time = (
+        time.time() - start
+    )
+
+    # Pixel statistics retained for calculation section
+    gray = gray_array(img)
+
+    mean = float(
+        np.mean(gray)
+    )
+
+    std = float(
+        np.std(gray)
+    )
+
+    emotion_scores = first.get(
+        "emotion",
+        {}
+    )
+
+    if isinstance(
+        emotion_scores,
+        dict
+    ):
+
+        expression_score = float(
+            max(
+                emotion_scores.values()
+            ) / 100.0
+        )
+
+    else:
+
+        expression_score = 0.0
 
     return output, {
-        "faces": 1,
-        "age": estimated_age,
+        "faces": len(analysis),
+        "age": age,
+        "gender": gender,
+        "emotion": emotion,
+        "race": race,
+        "confidence": float(confidence),
         "expression_score": expression_score,
-        "expression": expression,
+        "expression": emotion,
         "mean": mean,
         "std": std,
-        "processing_time": elapsed
+        "processing_time": processing_time
     }
 
 
@@ -779,31 +946,44 @@ def deepface_analysis(img):
 # FACENET
 # ============================================================
 
-def create_128_embedding(img):
+def get_facenet_embedding(img):
 
-    gray = gray_array(img)
+    if not DEEPFACE_AVAILABLE:
 
-    x1, y1, x2, y2 = estimate_face_region(img)
+        raise RuntimeError(
+            "DeepFace is not installed."
+        )
 
-    roi = gray[y1:y2, x1:x2]
+    bgr = pil_to_bgr(img)
 
-    # Resize to 16 × 8 = 128 values
-
-    small = Image.fromarray(
-        np.clip(roi, 0, 255).astype(np.uint8)
-    ).resize((16, 8))
-
-    embedding = (
-        np.array(small).astype(np.float32)
-        .flatten()
-        / 255.0
+    embedding_objects = DeepFace.represent(
+        img_path=bgr,
+        model_name="Facenet",
+        detector_backend="opencv",
+        enforce_detection=False,
+        align=True,
+        normalization="base"
     )
 
-    # Normalize
-    norm = np.linalg.norm(embedding)
+    if isinstance(
+        embedding_objects,
+        dict
+    ):
 
-    if norm != 0:
-        embedding = embedding / norm
+        embedding_objects = [
+            embedding_objects
+        ]
+
+    if len(embedding_objects) == 0:
+
+        raise RuntimeError(
+            "No FaceNet embedding was generated."
+        )
+
+    embedding = np.array(
+        embedding_objects[0]["embedding"],
+        dtype=np.float32
+    )
 
     return embedding
 
@@ -817,24 +997,28 @@ def cosine_similarity(a, b):
     )
 
     if denominator == 0:
+
         return 0.0
 
     return float(
-        np.dot(a, b) / denominator
+        np.dot(a, b) /
+        denominator
     )
 
 
-def facenet_analysis(img):
+def facenet_analysis(
+    img,
+    comparison_image
+):
 
-    embedding = create_128_embedding(img)
+    start = time.time()
 
-    # Compare against slightly transformed version
-    transformed = img.transpose(
-        Image.Transpose.FLIP_LEFT_RIGHT
+    embedding = get_facenet_embedding(
+        img
     )
 
-    embedding2 = create_128_embedding(
-        transformed
+    embedding2 = get_facenet_embedding(
+        comparison_image
     )
 
     cosine = cosine_similarity(
@@ -844,19 +1028,89 @@ def facenet_analysis(img):
 
     distance = float(
         np.linalg.norm(
-            embedding - embedding2
+            embedding -
+            embedding2
         )
     )
 
-    output = draw_face_box(img)
+    verification = None
+
+    try:
+
+        verification = DeepFace.verify(
+            img1_path=pil_to_bgr(img),
+            img2_path=pil_to_bgr(
+                comparison_image
+            ),
+            model_name="Facenet",
+            detector_backend="opencv",
+            distance_metric="cosine",
+            enforce_detection=False,
+            align=True,
+            silent=True
+        )
+
+    except Exception:
+
+        verification = {}
+
+    output = img.copy()
+
+    draw = ImageDraw.Draw(output)
+
+    draw.rectangle(
+        (
+            5,
+            5,
+            img.width - 5,
+            img.height - 5
+        ),
+        outline="#ff806f",
+        width=4
+    )
+
+    draw.text(
+        (
+            15,
+            15
+        ),
+        "FACENET EMBEDDING",
+        fill="#ffd0bf"
+    )
+
+    elapsed = (
+        time.time() -
+        start
+    )
+
+    verified = verification.get(
+        "verified",
+        False
+    )
+
+    threshold = verification.get(
+        "threshold",
+        None
+    )
 
     return output, {
-        "dimension": len(embedding),
+        "dimension": len(
+            embedding
+        ),
         "cosine": cosine,
         "distance": distance,
         "first": embedding[:8],
-        "mean": float(np.mean(embedding)),
-        "std": float(np.std(embedding))
+        "mean": float(
+            np.mean(embedding)
+        ),
+        "std": float(
+            np.std(embedding)
+        ),
+        "verified": bool(
+            verified
+        ),
+        "threshold": threshold,
+        "processing_time": elapsed
     }
 
 
@@ -864,7 +1118,11 @@ def facenet_analysis(img):
 # PIXEL LENS
 # ============================================================
 
-def pixel_lens(img, px, py):
+def pixel_lens(
+    img,
+    px,
+    py
+):
 
     gray = gray_array(img)
 
@@ -882,11 +1140,25 @@ def pixel_lens(img, px, py):
 
     half = 4
 
-    x1 = max(0, px - half)
-    x2 = min(w, px + half)
+    x1 = max(
+        0,
+        px - half
+    )
 
-    y1 = max(0, py - half)
-    y2 = min(h, py + half)
+    x2 = min(
+        w,
+        px + half
+    )
+
+    y1 = max(
+        0,
+        py - half
+    )
+
+    y2 = min(
+        h,
+        py + half
+    )
 
     matrix = gray[
         y1:y2,
@@ -895,12 +1167,21 @@ def pixel_lens(img, px, py):
 
     return {
         "matrix": matrix,
-        "center": float(gray[py, px]),
-        "mean": float(np.mean(matrix)),
-        "minimum": float(np.min(matrix)),
-        "maximum": float(np.max(matrix)),
+        "center": float(
+            gray[py, px]
+        ),
+        "mean": float(
+            np.mean(matrix)
+        ),
+        "minimum": float(
+            np.min(matrix)
+        ),
+        "maximum": float(
+            np.max(matrix)
+        ),
         "range": float(
-            np.max(matrix) - np.min(matrix)
+            np.max(matrix) -
+            np.min(matrix)
         ),
         "x": px,
         "y": py
@@ -968,7 +1249,9 @@ with col2:
 
 if uploaded is not None:
 
-    original = Image.open(uploaded).convert("RGB")
+    original = Image.open(
+        uploaded
+    ).convert("RGB")
 
 else:
 
@@ -1002,19 +1285,122 @@ operation = st.selectbox(
     operations
 )
 
+
+# ============================================================
+# EXTRA INPUTS
+# ============================================================
+
+template_image = None
+comparison_image = None
+
+
+if operation == "Template Matching":
+
+    st.markdown("""
+    <div class="card">
+
+    <div class="card-heading">
+    🖼️ Template Image
+    </div>
+
+    <div class="info-text">
+    Upload a separate small image/template.
+    The application will search for this exact
+    visual pattern inside the input image.
+    </div>
+
+    </div>
+    """, unsafe_allow_html=True)
+
+    template_uploaded = st.file_uploader(
+        "Upload template image",
+        type=[
+            "jpg",
+            "jpeg",
+            "png",
+            "webp"
+        ],
+        key="template_uploader"
+    )
+
+    if template_uploaded is not None:
+
+        template_image = Image.open(
+            template_uploaded
+        ).convert("RGB")
+
+        template_image = resize_for_processing(
+            template_image,
+            max_size=300
+        )
+
+        st.image(
+            template_image,
+            caption="Selected Template",
+            width=250
+        )
+
+
+elif operation == "FaceNet":
+
+    st.markdown("""
+    <div class="card">
+
+    <div class="card-heading">
+    🧬 FaceNet Comparison Image
+    </div>
+
+    <div class="info-text">
+    Upload another face image. FaceNet generates
+    embeddings for both images and performs
+    actual face comparison.
+    </div>
+
+    </div>
+    """, unsafe_allow_html=True)
+
+    comparison_uploaded = st.file_uploader(
+        "Upload comparison face image",
+        type=[
+            "jpg",
+            "jpeg",
+            "png",
+            "webp"
+        ],
+        key="comparison_uploader"
+    )
+
+    if comparison_uploaded is not None:
+
+        comparison_image = Image.open(
+            comparison_uploaded
+        ).convert("RGB")
+
+        comparison_image = resize_for_processing(
+            comparison_image,
+            max_size=640
+        )
+
+        st.image(
+            comparison_image,
+            caption="FaceNet Comparison Image",
+            width=300
+        )
+
+
 operation_info = {
 
     "Template Matching":
         "Finds the location where a selected template best matches the image.",
 
     "Viola–Jones Algorithm":
-        "Uses Haar-like features and an integral image for fast face detection.",
+        "Uses Haar-like features, integral images and a Haar Cascade classifier for face detection.",
 
     "DeepFace":
-        "Uses deep-learning style facial feature analysis.",
+        "Uses an actual deep-learning face analysis model for facial attributes and representation.",
 
     "FaceNet":
-        "Represents a face as a numerical embedding vector."
+        "Generates actual FaceNet embeddings and compares two faces using vector similarity."
 }
 
 
@@ -1063,11 +1449,11 @@ R(x,y) =
 
 "steps":
 """
-1. Convert the input image into grayscale.
-2. Select a face-region template.
-3. Slide the template across the image.
-4. Calculate normalized correlation.
-5. Find the position having the highest score.
+1. Convert the input and template images into grayscale.
+2. Use the uploaded template as the reference.
+3. Slide the template across the input image.
+4. Calculate normalized correlation using OpenCV.
+5. Find the highest matching position.
 6. Draw the detected matching region.
 """
 
@@ -1095,10 +1481,10 @@ White Rectangle − Black Rectangle
 """
 1. Convert image to grayscale.
 2. Construct the integral image.
-3. Select Haar-like rectangular regions.
-4. Calculate rectangle sums.
-5. Calculate Haar feature differences.
-6. Use the feature response as a detection measure.
+3. Load the Haar Cascade classifier.
+4. Detect faces using the trained cascade.
+5. Calculate Haar rectangle sums.
+6. Display the detected face regions.
 """
 },
 
@@ -1107,8 +1493,8 @@ White Rectangle − Black Rectangle
 "definition":
 """
 DeepFace is a deep-learning based face-analysis framework.
-It represents a face using learned visual features and can be
-used for face recognition and analysis.
+It performs actual facial representation and facial attribute
+analysis using pretrained deep-learning models.
 """,
 
 "formula":
@@ -1122,11 +1508,12 @@ Standard Deviation =
 
 "steps":
 """
-1. Obtain the face region.
-2. Convert the region into numerical pixel features.
-3. Calculate feature statistics.
-4. Analyse intensity and local facial variation.
-5. Produce the analysis result.
+1. Obtain the input face image.
+2. Detect and align the face.
+3. Pass the face through the DeepFace models.
+4. Predict age, gender, emotion and race.
+5. Generate facial representation.
+6. Display the actual analysis results.
 """
 },
 
@@ -1134,9 +1521,9 @@ Standard Deviation =
 
 "definition":
 """
-FaceNet represents a face as a compact numerical embedding.
-Faces can then be compared using distances or similarity
-between their embedding vectors.
+FaceNet represents a face as a numerical embedding vector.
+The actual FaceNet model generates a 128-dimensional representation
+which can be compared using vector distance and similarity.
 """,
 
 "formula":
@@ -1150,11 +1537,12 @@ Euclidean Distance =
 
 "steps":
 """
-1. Extract the face region.
-2. Resize the face representation.
-3. Convert the face into numerical features.
-4. Normalize the embedding.
-5. Compare embeddings using cosine similarity.
+1. Detect and align the face.
+2. Generate the actual FaceNet embedding.
+3. Generate an embedding for the comparison image.
+4. Calculate cosine similarity.
+5. Calculate Euclidean distance.
+6. Perform actual face verification.
 """
 }
 
@@ -1205,28 +1593,93 @@ st.markdown(f"""
 # PROCESS IMAGE
 # ============================================================
 
-if operation == "Template Matching":
+processing_error = None
 
-    output, result = normalized_template_matching(
-        original
-    )
+try:
 
-elif operation == "Viola–Jones Algorithm":
+    if operation == "Template Matching":
 
-    output, result = viola_jones_analysis(
-        original
-    )
+        if template_image is not None:
 
-elif operation == "DeepFace":
+            output, result = actual_template_matching(
+                original,
+                template_image
+            )
 
-    output, result = deepface_analysis(
-        original
-    )
+        else:
 
-else:
+            output = original.copy()
 
-    output, result = facenet_analysis(
-        original
+            result = {
+                "score": 0.0,
+                "x": 0,
+                "y": 0,
+                "width": 0,
+                "height": 0
+            }
+
+            st.info(
+                "Upload a template image to perform actual template matching."
+            )
+
+
+    elif operation == "Viola–Jones Algorithm":
+
+        output, result = viola_jones_analysis(
+            original
+        )
+
+
+    elif operation == "DeepFace":
+
+        output, result = deepface_analysis(
+            original
+        )
+
+
+    else:
+
+        if comparison_image is not None:
+
+            output, result = facenet_analysis(
+                original,
+                comparison_image
+            )
+
+        else:
+
+            output = original.copy()
+
+            result = {
+                "dimension": 128,
+                "cosine": 0.0,
+                "distance": 0.0,
+                "first": np.zeros(8),
+                "mean": 0.0,
+                "std": 0.0,
+                "verified": False,
+                "threshold": None,
+                "processing_time": 0.0
+            }
+
+            st.info(
+                "Upload a comparison image to perform actual FaceNet comparison."
+            )
+
+except Exception as e:
+
+    processing_error = str(e)
+
+    output = original.copy()
+
+    result = {}
+
+
+if processing_error:
+
+    st.error(
+        "Processing error: " +
+        processing_error
     )
 
 
@@ -1279,7 +1732,11 @@ st.markdown(
 )
 
 
-def calc_card(title, value, formula):
+def calc_card(
+    title,
+    value,
+    formula
+):
 
     st.markdown(f"""
     <div class="calc-card">
@@ -1305,40 +1762,45 @@ if operation == "Template Matching":
     c1, c2, c3 = st.columns(3)
 
     with c1:
+
         calc_card(
             "Correlation Score",
-            f"{result['score']:.4f}",
-            "Normalized cross-correlation"
+            f"{result.get('score', 0):.4f}",
+            "OpenCV normalized cross-correlation"
         )
 
     with c2:
+
         calc_card(
             "Best X Position",
-            f"{result['x']} px",
+            f"{result.get('x', 0)} px",
             "Horizontal template position"
         )
 
     with c3:
+
         calc_card(
             "Best Y Position",
-            f"{result['y']} px",
+            f"{result.get('y', 0)} px",
             "Vertical template position"
         )
 
     c4, c5 = st.columns(2)
 
     with c4:
+
         calc_card(
             "Template Width",
-            f"{result['width']} px",
-            "Selected template width"
+            f"{result.get('width', 0)} px",
+            "Uploaded template width"
         )
 
     with c5:
+
         calc_card(
             "Template Height",
-            f"{result['height']} px",
-            "Selected template height"
+            f"{result.get('height', 0)} px",
+            "Uploaded template height"
         )
 
 
@@ -1347,40 +1809,50 @@ elif operation == "Viola–Jones Algorithm":
     c1, c2, c3 = st.columns(3)
 
     with c1:
+
         calc_card(
-            "White Region Sum",
-            f"{result['left_sum']:.2f}",
-            "Integral-image rectangle sum"
+            "Detected Face Regions",
+            str(
+                result.get(
+                    "faces",
+                    0
+                )
+            ),
+            "Actual Haar Cascade detections"
         )
 
     with c2:
+
         calc_card(
-            "Black Region Sum",
-            f"{result['right_sum']:.2f}",
+            "White Region Sum",
+            f"{result.get('left_sum', 0):.2f}",
             "Integral-image rectangle sum"
         )
 
     with c3:
+
         calc_card(
-            "Haar Difference",
-            f"{result['difference']:.2f}",
-            "White − Black"
+            "Black Region Sum",
+            f"{result.get('right_sum', 0):.2f}",
+            "Integral-image rectangle sum"
         )
 
     c4, c5 = st.columns(2)
 
     with c4:
+
         calc_card(
-            "Normalized Haar Response",
-            f"{result['normalized']:.5f}",
-            "Haar difference / face area"
+            "Haar Difference",
+            f"{result.get('difference', 0):.2f}",
+            "White − Black"
         )
 
     with c5:
+
         calc_card(
-            "Face ROI Area",
-            f"{result['area']} px²",
-            "Width × Height"
+            "Normalized Haar Response",
+            f"{result.get('normalized', 0):.5f}",
+            "Haar difference / face area"
         )
 
 
@@ -1389,46 +1861,98 @@ elif operation == "DeepFace":
     c1, c2, c3 = st.columns(3)
 
     with c1:
+
         calc_card(
             "Detected Face Regions",
-            str(result["faces"]),
-            "Estimated facial region"
+            str(
+                result.get(
+                    "faces",
+                    0
+                )
+            ),
+            "Actual DeepFace face detection"
         )
 
     with c2:
+
         calc_card(
-            "Feature Age Estimate",
-            f"{result['age']:.1f}",
-            "Educational feature-based estimate"
+            "Age",
+            f"{result.get('age', 0):.1f}",
+            "DeepFace age model"
         )
 
     with c3:
+
         calc_card(
-            "Expression Score",
-            f"{result['expression_score']:.4f}",
-            "Normalized local feature variation"
+            "Gender",
+            str(
+                result.get(
+                    "gender",
+                    "Unknown"
+                )
+            ),
+            "DeepFace gender model"
         )
 
     c4, c5, c6 = st.columns(3)
 
     with c4:
+
         calc_card(
-            "Mean Intensity",
-            f"{result['mean']:.4f}",
-            "μ = Σxᵢ / N"
+            "Emotion",
+            str(
+                result.get(
+                    "emotion",
+                    "Unknown"
+                )
+            ),
+            "DeepFace emotion model"
         )
 
     with c5:
+
         calc_card(
-            "Std. Deviation",
-            f"{result['std']:.4f}",
-            "σ = √[Σ(xᵢ−μ)²/N]"
+            "Race",
+            str(
+                result.get(
+                    "race",
+                    "Unknown"
+                )
+            ),
+            "DeepFace race model"
         )
 
     with c6:
+
+        calc_card(
+            "Face Confidence",
+            f"{result.get('confidence', 0):.2f}",
+            "DeepFace detector confidence"
+        )
+
+    c7, c8, c9 = st.columns(3)
+
+    with c7:
+
+        calc_card(
+            "Mean Intensity",
+            f"{result.get('mean', 0):.4f}",
+            "μ = Σxᵢ / N"
+        )
+
+    with c8:
+
+        calc_card(
+            "Std. Deviation",
+            f"{result.get('std', 0):.4f}",
+            "σ = √[Σ(xᵢ−μ)²/N]"
+        )
+
+    with c9:
+
         calc_card(
             "Processing Time",
-            f"{result['processing_time']:.5f} s",
+            f"{result.get('processing_time', 0):.5f} s",
             "End time − start time"
         )
 
@@ -1440,7 +1964,13 @@ elif operation == "DeepFace":
     </div>
 
     <div class="info-text">
-    {result["expression"]}
+    Emotion: {result.get("emotion", "Unknown")}
+    <br>
+    Gender: {result.get("gender", "Unknown")}
+    <br>
+    Race: {result.get("race", "Unknown")}
+    <br>
+    Estimated Age: {result.get("age", 0):.1f}
     </div>
 
     </div>
@@ -1452,39 +1982,88 @@ else:
     c1, c2, c3 = st.columns(3)
 
     with c1:
+
         calc_card(
             "Embedding Dimension",
-            str(result["dimension"]),
-            "16 × 8 = 128 numerical features"
+            str(
+                result.get(
+                    "dimension",
+                    128
+                )
+            ),
+            "Actual FaceNet embedding dimension"
         )
 
     with c2:
+
         calc_card(
             "Cosine Similarity",
-            f"{result['cosine']:.6f}",
+            f"{result.get('cosine', 0):.6f}",
             "(A · B) / (||A|| ||B||)"
         )
 
     with c3:
+
         calc_card(
             "Euclidean Distance",
-            f"{result['distance']:.6f}",
+            f"{result.get('distance', 0):.6f}",
             "√Σ(Aᵢ − Bᵢ)²"
         )
 
     c4, c5 = st.columns(2)
 
     with c4:
+
         calc_card(
-            "Embedding Mean",
-            f"{result['mean']:.6f}",
-            "Mean of 128 normalized features"
+            "Face Verification",
+            (
+                "MATCH"
+                if result.get(
+                    "verified",
+                    False
+                )
+                else "NOT MATCHED"
+            ),
+            "Actual FaceNet verification"
         )
 
     with c5:
+
+        threshold = result.get(
+            "threshold",
+            None
+        )
+
+        threshold_text = (
+            f"{threshold:.6f}"
+            if isinstance(
+                threshold,
+                (float, int)
+            )
+            else "Model default"
+        )
+
+        calc_card(
+            "Verification Threshold",
+            threshold_text,
+            "DeepFace FaceNet cosine threshold"
+        )
+
+    c6, c7 = st.columns(2)
+
+    with c6:
+
+        calc_card(
+            "Embedding Mean",
+            f"{result.get('mean', 0):.6f}",
+            "Mean of actual FaceNet embedding"
+        )
+
+    with c7:
+
         calc_card(
             "Embedding Std.",
-            f"{result['std']:.6f}",
+            f"{result.get('std', 0):.6f}",
             "Standard deviation of embedding"
         )
 
@@ -1496,14 +2075,18 @@ else:
     </div>
 
     <div class="info-text">
-    First 8 dimensions of the 128-dimensional face representation:
+    First 8 dimensions of the actual 128-dimensional
+    FaceNet representation:
     </div>
 
     <div class="formula">
     """ +
     " &nbsp;&nbsp; ".join(
         f"{v:.4f}"
-        for v in result["first"]
+        for v in result.get(
+            "first",
+            np.zeros(8)
+        )
     )
     +
     """
@@ -1612,22 +2195,43 @@ matrix = pixel["matrix"]
 matrix_html = '<div class="pixel-box">'
 
 for row in matrix:
+
     for value in row:
-        intensity = int(max(0, min(255, value)))
-        text_color = "#111111" if intensity > 160 else "#ffffff"
+
+        intensity = int(
+            max(
+                0,
+                min(
+                    255,
+                    value
+                )
+            )
+        )
+
+        text_color = (
+            "#111111"
+            if intensity > 160
+            else "#ffffff"
+        )
+
         matrix_html += (
             f'<div class="pixel-value" '
-            f'style="background:rgb({intensity},{intensity},{intensity});'
-            f'color:{text_color};">{intensity}</div>'
+            f'style="background:rgb('
+            f'{intensity},{intensity},{intensity});'
+            f'color:{text_color};">'
+            f'{intensity}'
+            f'</div>'
         )
 
 matrix_html += '</div>'
 
-st.markdown(matrix_html, unsafe_allow_html=True)
+st.markdown(
+    matrix_html,
+    unsafe_allow_html=True
+)
 
 
 # ============================================================
-
 # PROCESSING SUMMARY
 # ============================================================
 
@@ -1636,42 +2240,55 @@ st.markdown(
     unsafe_allow_html=True
 )
 
+
 if operation == "Template Matching":
 
     summary = (
-        f"The template was compared against the image using "
-        f"normalized correlation. The highest calculated "
-        f"correlation was {result['score']:.4f} at pixel "
-        f"({result['x']}, {result['y']})."
+        f"The uploaded template was compared against "
+        f"the input image using OpenCV normalized "
+        f"template matching. The highest correlation "
+        f"was {result.get('score', 0):.4f} at pixel "
+        f"({result.get('x', 0)}, "
+        f"{result.get('y', 0)})."
     )
+
 
 elif operation == "Viola–Jones Algorithm":
 
     summary = (
-        f"The integral image was used to calculate Haar "
-        f"rectangle sums. The measured Haar difference was "
-        f"{result['difference']:.2f}, with a normalized response "
-        f"of {result['normalized']:.5f}."
+        f"The Haar Cascade classifier detected "
+        f"{result.get('faces', 0)} face region(s). "
+        f"The integral image was used for rectangle "
+        f"sum calculations. The Haar difference was "
+        f"{result.get('difference', 0):.2f}."
     )
+
 
 elif operation == "DeepFace":
 
     summary = (
-        f"The face region produced a mean intensity of "
-        f"{result['mean']:.2f} and standard deviation of "
-        f"{result['std']:.2f}. The local feature analysis "
-        f"produced an expression variation score of "
-        f"{result['expression_score']:.4f}."
+        f"DeepFace detected "
+        f"{result.get('faces', 0)} face region(s). "
+        f"The actual facial analysis estimated age "
+        f"{result.get('age', 0):.1f}, gender "
+        f"{result.get('gender', 'Unknown')}, "
+        f"emotion {result.get('emotion', 'Unknown')}, "
+        f"and race {result.get('race', 'Unknown')}."
     )
+
 
 else:
 
     summary = (
-        f"The face was represented as a {result['dimension']}-"
-        f"dimensional normalized embedding. Comparison with a "
-        f"transformed representation produced cosine similarity "
-        f"{result['cosine']:.6f} and Euclidean distance "
-        f"{result['distance']:.6f}."
+        f"The actual FaceNet model generated a "
+        f"{result.get('dimension', 128)}-dimensional "
+        f"face embedding. The two face embeddings "
+        f"produced cosine similarity "
+        f"{result.get('cosine', 0):.6f} and "
+        f"Euclidean distance "
+        f"{result.get('distance', 0):.6f}. "
+        f"Verification result: "
+        f"{'MATCH' if result.get('verified', False) else 'NOT MATCHED'}."
     )
 
 
