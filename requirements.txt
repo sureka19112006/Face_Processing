@@ -1,5 +1,5 @@
 streamlit
-opencv-python-headless
+opencv-python-headless==4.12.0.88
 numpy
 Pillow
 scikit-learn
@@ -7,5 +7,5 @@ pandas
 scikit-image
 tensorflow==2.21.0
 tf-keras==2.21.0
-deepface
+deepface[tensorflow]
 keras-facenet
