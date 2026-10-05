@@ -3,6 +3,10 @@ import numpy as np
 from PIL import Image, ImageDraw
 import math
 import time
+import os
+
+# Streamlit Cloud / Linux OpenCV compatibility
+os.environ.setdefault("OPENCV_IO_MAX_IMAGE_PIXELS", "50000000")
 import cv2
 
 # ============================================================
