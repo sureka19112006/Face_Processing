@@ -5,5 +5,8 @@ Pillow
 scikit-learn
 pandas
 scikit-image
-deepface[tensorflow]
+
+tensorflow==2.21.0
+tf-keras==2.21.0
+deepface
 keras-facenet
