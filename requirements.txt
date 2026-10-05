@@ -5,3 +5,7 @@ Pillow
 scikit-learn
 pandas
 scikit-image
+deepface
+tf-keras
+tensorflow
+keras-facenet
