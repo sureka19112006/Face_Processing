@@ -9,7 +9,6 @@ This application provides a visual and interactive way to understand important f
 https://faceprocessing-vnbrhjczv5hfeutxcrtsy4.streamlit.app/
 
 
-
 ✨ Features
 
 - 👤 Face image processing
