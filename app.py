@@ -1,24 +1,22 @@
+import os
+
+# ============================================================
+# DEPLOYMENT-SAFE ENVIRONMENT SETTINGS
+# MUST COME BEFORE TENSORFLOW / DEEPFACE IMPORTS
+# ============================================================
+
+os.environ.setdefault("OPENCV_IO_MAX_IMAGE_PIXELS", "50000000")
+os.environ.setdefault("CUDA_VISIBLE_DEVICES", "-1")
+os.environ.setdefault("TF_CPP_MIN_LOG_LEVEL", "2")
+os.environ.setdefault("OMP_NUM_THREADS", "1")
+os.environ.setdefault("TF_NUM_INTRAOP_THREADS", "1")
+os.environ.setdefault("TF_NUM_INTEROP_THREADS", "1")
+
 import streamlit as st
 import numpy as np
 from PIL import Image, ImageDraw
-import math
 import time
-import os
-
-# Streamlit Cloud / Linux OpenCV compatibility
-os.environ.setdefault("OPENCV_IO_MAX_IMAGE_PIXELS", "50000000")
 import cv2
-
-# ============================================================
-# OPTIONAL / ACTUAL AI LIBRARIES
-# ============================================================
-
-try:
-    from deepface import DeepFace
-    DEEPFACE_AVAILABLE = True
-except Exception:
-    DeepFace = None
-    DEEPFACE_AVAILABLE = False
 
 
 # ============================================================
@@ -96,14 +94,11 @@ html, body, [class*="css"] {
         rgba(39, 25, 40, 0.95),
         rgba(18, 13, 20, 0.98)
     );
-
     border: 1px solid rgba(255, 154, 126, 0.28);
     border-left: 4px solid #ff987c;
     border-radius: 20px;
-
     padding: 25px;
     margin-bottom: 18px;
-
     box-shadow:
         0 10px 35px rgba(0,0,0,0.35),
         inset 0 0 20px rgba(255,150,120,0.025);
@@ -114,12 +109,6 @@ html, body, [class*="css"] {
     font-size: 22px;
     color: #ffd1c1;
     margin-bottom: 12px;
-}
-
-.card-subheading {
-    color: #cfaed2;
-    font-size: 13px;
-    letter-spacing: 1px;
 }
 
 .info-text {
@@ -145,7 +134,6 @@ html, body, [class*="css"] {
         #241527,
         #130d17
     );
-
     border: 1px solid rgba(255,154,126,0.25);
     border-radius: 18px;
     padding: 18px;
@@ -169,7 +157,6 @@ html, body, [class*="css"] {
             rgba(255,150,120,0.08),
             rgba(112,70,120,0.10)
         );
-
     border: 1px solid rgba(255,167,141,0.25);
     border-radius: 18px;
     padding: 20px;
@@ -236,7 +223,6 @@ html, body, [class*="css"] {
         #ff987c,
         #d56e88
     );
-
     color: #160c14;
     border: none;
     border-radius: 12px;
@@ -282,6 +268,15 @@ html, body, [class*="css"] {
     font-size: 11px;
 }
 
+.warning-box {
+    background: rgba(255, 170, 80, 0.08);
+    border: 1px solid rgba(255, 170, 80, 0.3);
+    border-radius: 15px;
+    padding: 15px;
+    color: #ffd5a8;
+    margin: 15px 0;
+}
+
 </style>
 """, unsafe_allow_html=True)
 
@@ -309,17 +304,51 @@ INTERACTIVE COMPUTER VISION • IMAGE ANALYSIS • FACE REPRESENTATION
 
 
 # ============================================================
+# SAFE IMAGE SIZE
+# ============================================================
+
+MAX_PROCESSING_SIZE = 512
+
+
+def resize_for_processing(img, max_size=MAX_PROCESSING_SIZE):
+
+    img = img.convert("RGB")
+
+    w, h = img.size
+
+    scale = min(
+        1.0,
+        max_size / max(w, h)
+    )
+
+    if scale < 1:
+
+        img = img.resize(
+            (
+                max(1, int(w * scale)),
+                max(1, int(h * scale))
+            ),
+            Image.Resampling.LANCZOS
+        )
+
+    return img
+
+
+# ============================================================
 # IMAGE UTILITIES
 # ============================================================
 
 def load_default_image():
 
     try:
+
         from skimage import data
 
         arr = data.astronaut()
 
-        return Image.fromarray(arr).convert("RGB")
+        return Image.fromarray(
+            arr
+        ).convert("RGB")
 
     except Exception:
 
@@ -358,42 +387,25 @@ def load_default_image():
 
 
 def pil_to_array(img):
-    return np.array(img.convert("RGB"))
+
+    return np.array(
+        img.convert("RGB")
+    )
 
 
 def gray_array(img):
 
-    arr = pil_to_array(img).astype(np.float32)
+    arr = pil_to_array(
+        img
+    ).astype(
+        np.float32
+    )
 
-    gray = (
+    return (
         0.299 * arr[:, :, 0]
         + 0.587 * arr[:, :, 1]
         + 0.114 * arr[:, :, 2]
     )
-
-    return gray
-
-
-def resize_for_processing(img, max_size=640):
-
-    w, h = img.size
-
-    scale = min(
-        1.0,
-        max_size / max(w, h)
-    )
-
-    if scale < 1:
-
-        img = img.resize(
-            (
-                int(w * scale),
-                int(h * scale)
-            ),
-            Image.Resampling.LANCZOS
-        )
-
-    return img
 
 
 def pil_to_bgr(img):
@@ -430,7 +442,6 @@ def actual_template_matching(
     ih, iw = image_gray.shape
     th, tw = template_gray.shape
 
-    # Template must be smaller than input
     if th > ih or tw > iw:
 
         scale = min(
@@ -466,7 +477,9 @@ def actual_template_matching(
 
     output = image.copy()
 
-    draw = ImageDraw.Draw(output)
+    draw = ImageDraw.Draw(
+        output
+    )
 
     x, y = max_loc
 
@@ -500,14 +513,16 @@ def actual_template_matching(
 
 
 # ============================================================
-# REAL VIOLA-JONES
+# HAAR CASCADE
 # ============================================================
 
 @st.cache_resource
 def load_haar_cascade():
 
-    cascade_path = cv2.data.haarcascades + \
-        "haarcascade_frontalface_default.xml"
+    cascade_path = (
+        cv2.data.haarcascades
+        + "haarcascade_frontalface_default.xml"
+    )
 
     cascade = cv2.CascadeClassifier(
         cascade_path
@@ -524,7 +539,9 @@ def load_haar_cascade():
 
 def viola_jones_detection(img):
 
-    bgr = pil_to_bgr(img)
+    bgr = pil_to_bgr(
+        img
+    )
 
     gray = cv2.cvtColor(
         bgr,
@@ -542,9 +559,13 @@ def viola_jones_detection(img):
 
     output = img.copy()
 
-    draw = ImageDraw.Draw(output)
+    draw = ImageDraw.Draw(
+        output
+    )
 
-    for i, (x, y, w, h) in enumerate(faces):
+    for i, (x, y, w, h) in enumerate(
+        faces
+    ):
 
         draw.rectangle(
             (
@@ -617,12 +638,14 @@ def rectangle_sum(
     total = ii[y2, x2]
 
     if x1 > 0:
+
         total -= ii[
             y2,
             x1 - 1
         ]
 
     if y1 > 0:
+
         total -= ii[
             y1 - 1,
             x2
@@ -640,9 +663,13 @@ def rectangle_sum(
 
 def viola_jones_analysis(img):
 
-    gray = gray_array(img)
+    gray = gray_array(
+        img
+    )
 
-    ii = integral_image(gray)
+    ii = integral_image(
+        gray
+    )
 
     output, faces = viola_jones_detection(
         img
@@ -651,7 +678,8 @@ def viola_jones_analysis(img):
     if len(faces) > 0:
 
         x, y, width, height = [
-            int(v) for v in faces[0]
+            int(v)
+            for v in faces[0]
         ]
 
     else:
@@ -710,7 +738,9 @@ def viola_jones_analysis(img):
         face_area
     )
 
-    draw = ImageDraw.Draw(output)
+    draw = ImageDraw.Draw(
+        output
+    )
 
     draw.line(
         (
@@ -746,30 +776,82 @@ def viola_jones_analysis(img):
 
 
 # ============================================================
-# DEEPFACE
+# DEEPFACE - LAZY IMPORT
+# ============================================================
+
+@st.cache_resource
+def load_deepface():
+
+    try:
+
+        import tensorflow as tf
+
+        try:
+
+            tf.config.set_visible_devices(
+                [],
+                "GPU"
+            )
+
+        except Exception:
+            pass
+
+        try:
+
+            tf.config.threading.set_intra_op_parallelism_threads(
+                1
+            )
+
+            tf.config.threading.set_inter_op_parallelism_threads(
+                1
+            )
+
+        except Exception:
+            pass
+
+        from deepface import DeepFace
+
+        return DeepFace
+
+    except Exception as e:
+
+        raise RuntimeError(
+            "DeepFace could not be loaded. "
+            "Deployment-safe DeepFace initialization failed: "
+            + str(e)
+        )
+
+
+# ============================================================
+# DEPLOYMENT-SAFE DEEPFACE
 # ============================================================
 
 def deepface_analysis(img):
 
-    if not DEEPFACE_AVAILABLE:
-
-        raise RuntimeError(
-            "DeepFace is not installed. "
-            "Add deepface[tensorflow] to requirements.txt."
-        )
-
     start = time.time()
 
-    bgr = pil_to_bgr(img)
+    DeepFace = load_deepface()
+
+    safe_img = resize_for_processing(
+        img,
+        384
+    )
+
+    bgr = pil_to_bgr(
+        safe_img
+    )
+
+    # --------------------------------------------------------
+    # IMPORTANT:
+    # ONLY EMOTION MODEL IS USED.
+    #
+    # Age / Gender / Race models are NOT loaded.
+    # This reduces deployment memory usage.
+    # --------------------------------------------------------
 
     analysis = DeepFace.analyze(
         img_path=bgr,
-        actions=[
-            "age",
-            "gender",
-            "emotion",
-            "race"
-        ],
+        actions=["emotion"],
         detector_backend="opencv",
         enforce_detection=False,
         align=True,
@@ -781,13 +863,23 @@ def deepface_analysis(img):
         dict
     ):
 
-        analysis = [analysis]
+        analysis = [
+            analysis
+        ]
+
+    if len(analysis) == 0:
+
+        raise RuntimeError(
+            "DeepFace did not return an analysis result."
+        )
 
     first = analysis[0]
 
-    output = img.copy()
+    output = safe_img.copy()
 
-    draw = ImageDraw.Draw(output)
+    draw = ImageDraw.Draw(
+        output
+    )
 
     face_region = first.get(
         "region",
@@ -824,91 +916,33 @@ def deepface_analysis(img):
             )
         )
 
-        draw.rectangle(
-            (
-                x,
-                y,
-                x + w,
-                y + h
-            ),
-            outline="#ff806f",
-            width=5
-        )
+        if w > 0 and h > 0:
 
-        draw.text(
-            (
-                x + 8,
-                y + 8
-            ),
-            "DEEPFACE",
-            fill="#ffd0bf"
-        )
+            draw.rectangle(
+                (
+                    x,
+                    y,
+                    x + w,
+                    y + h
+                ),
+                outline="#ff806f",
+                width=5
+            )
 
-    age = float(
-        first.get(
-            "age",
-            0
-        )
-    )
-
-    gender_value = first.get(
-        "dominant_gender",
-        "Unknown"
-    )
-
-    if isinstance(
-        first.get("gender"),
-        dict
-    ):
-
-        gender_scores = first["gender"]
-
-        gender = max(
-            gender_scores,
-            key=gender_scores.get
-        )
-
-    else:
-
-        gender = str(
-            gender_value
-        )
+            draw.text(
+                (
+                    x + 8,
+                    y + 8
+                ),
+                "DEEPFACE",
+                fill="#ffd0bf"
+            )
 
     emotion = str(
         first.get(
             "dominant_emotion",
             "Unknown"
         )
-    )
-
-    race = str(
-        first.get(
-            "dominant_race",
-            "Unknown"
-        )
-    )
-
-    confidence = first.get(
-        "face_confidence",
-        0
-    )
-
-    if confidence is None:
-        confidence = 0
-
-    processing_time = (
-        time.time() - start
-    )
-
-    # Pixel statistics retained for calculation section
-    gray = gray_array(img)
-
-    mean = float(
-        np.mean(gray)
-    )
-
-    std = float(
-        np.std(gray)
     )
 
     emotion_scores = first.get(
@@ -919,7 +953,7 @@ def deepface_analysis(img):
     if isinstance(
         emotion_scores,
         dict
-    ):
+    ) and emotion_scores:
 
         expression_score = float(
             max(
@@ -931,34 +965,98 @@ def deepface_analysis(img):
 
         expression_score = 0.0
 
+    gray = gray_array(
+        safe_img
+    )
+
+    mean = float(
+        np.mean(gray)
+    )
+
+    std = float(
+        np.std(gray)
+    )
+
+    processing_time = (
+        time.time()
+        -
+        start
+    )
+
     return output, {
-        "faces": len(analysis),
-        "age": age,
-        "gender": gender,
+
+        "faces": len(
+            analysis
+        ),
+
         "emotion": emotion,
-        "race": race,
-        "confidence": float(confidence),
-        "expression_score": expression_score,
-        "expression": emotion,
-        "mean": mean,
-        "std": std,
-        "processing_time": processing_time
+
+        "confidence":
+            float(
+                first.get(
+                    "face_confidence",
+                    0
+                ) or 0
+            ),
+
+        "expression_score":
+            expression_score,
+
+        "expression":
+            emotion,
+
+        "mean":
+            mean,
+
+        "std":
+            std,
+
+        "processing_time":
+            processing_time
     }
 
 
 # ============================================================
-# FACENET
+# FACENET - LAZY IMPORT
+# ============================================================
+
+@st.cache_resource
+def load_facenet_model():
+
+    try:
+
+        DeepFace = load_deepface()
+
+        model = DeepFace.build_model(
+            "Facenet"
+        )
+
+        return DeepFace, model
+
+    except Exception as e:
+
+        raise RuntimeError(
+            "FaceNet model could not be loaded: "
+            + str(e)
+        )
+
+
+# ============================================================
+# FACENET EMBEDDING
 # ============================================================
 
 def get_facenet_embedding(img):
 
-    if not DEEPFACE_AVAILABLE:
+    DeepFace, model = load_facenet_model()
 
-        raise RuntimeError(
-            "DeepFace is not installed."
-        )
+    safe_img = resize_for_processing(
+        img,
+        384
+    )
 
-    bgr = pil_to_bgr(img)
+    bgr = pil_to_bgr(
+        safe_img
+    )
 
     embedding_objects = DeepFace.represent(
         img_path=bgr,
@@ -978,7 +1076,9 @@ def get_facenet_embedding(img):
             embedding_objects
         ]
 
-    if len(embedding_objects) == 0:
+    if len(
+        embedding_objects
+    ) == 0:
 
         raise RuntimeError(
             "No FaceNet embedding was generated."
@@ -991,6 +1091,10 @@ def get_facenet_embedding(img):
 
     return embedding
 
+
+# ============================================================
+# COSINE SIMILARITY
+# ============================================================
 
 def cosine_similarity(a, b):
 
@@ -1005,10 +1109,15 @@ def cosine_similarity(a, b):
         return 0.0
 
     return float(
-        np.dot(a, b) /
+        np.dot(a, b)
+        /
         denominator
     )
 
+
+# ============================================================
+# FACENET ANALYSIS
+# ============================================================
 
 def facenet_analysis(
     img,
@@ -1037,37 +1146,28 @@ def facenet_analysis(
         )
     )
 
-    verification = None
+    verification_threshold = 0.70
 
-    try:
+    verified = (
+        cosine >=
+        verification_threshold
+    )
 
-        verification = DeepFace.verify(
-            img1_path=pil_to_bgr(img),
-            img2_path=pil_to_bgr(
-                comparison_image
-            ),
-            model_name="Facenet",
-            detector_backend="opencv",
-            distance_metric="cosine",
-            enforce_detection=False,
-            align=True,
-            silent=True
-        )
+    output = resize_for_processing(
+        img,
+        384
+    ).copy()
 
-    except Exception:
-
-        verification = {}
-
-    output = img.copy()
-
-    draw = ImageDraw.Draw(output)
+    draw = ImageDraw.Draw(
+        output
+    )
 
     draw.rectangle(
         (
             5,
             5,
-            img.width - 5,
-            img.height - 5
+            output.width - 5,
+            output.height - 5
         ),
         outline="#ff806f",
         width=4
@@ -1083,38 +1183,49 @@ def facenet_analysis(
     )
 
     elapsed = (
-        time.time() -
+        time.time()
+        -
         start
     )
 
-    verified = verification.get(
-        "verified",
-        False
-    )
-
-    threshold = verification.get(
-        "threshold",
-        None
-    )
-
     return output, {
-        "dimension": len(
-            embedding
-        ),
-        "cosine": cosine,
-        "distance": distance,
-        "first": embedding[:8],
-        "mean": float(
-            np.mean(embedding)
-        ),
-        "std": float(
-            np.std(embedding)
-        ),
-        "verified": bool(
-            verified
-        ),
-        "threshold": threshold,
-        "processing_time": elapsed
+
+        "dimension":
+            len(embedding),
+
+        "cosine":
+            cosine,
+
+        "distance":
+            distance,
+
+        "first":
+            embedding[:8],
+
+        "mean":
+            float(
+                np.mean(
+                    embedding
+                )
+            ),
+
+        "std":
+            float(
+                np.std(
+                    embedding
+                )
+            ),
+
+        "verified":
+            bool(
+                verified
+            ),
+
+        "threshold":
+            verification_threshold,
+
+        "processing_time":
+            elapsed
     }
 
 
@@ -1128,18 +1239,26 @@ def pixel_lens(
     py
 ):
 
-    gray = gray_array(img)
+    gray = gray_array(
+        img
+    )
 
     h, w = gray.shape
 
     px = max(
         0,
-        min(w - 1, px)
+        min(
+            w - 1,
+            px
+        )
     )
 
     py = max(
         0,
-        min(h - 1, py)
+        min(
+            h - 1,
+            py
+        )
     )
 
     half = 4
@@ -1170,25 +1289,42 @@ def pixel_lens(
     ]
 
     return {
-        "matrix": matrix,
-        "center": float(
-            gray[py, px]
-        ),
-        "mean": float(
-            np.mean(matrix)
-        ),
-        "minimum": float(
-            np.min(matrix)
-        ),
-        "maximum": float(
-            np.max(matrix)
-        ),
-        "range": float(
-            np.max(matrix) -
-            np.min(matrix)
-        ),
-        "x": px,
-        "y": py
+
+        "matrix":
+            matrix,
+
+        "center":
+            float(
+                gray[py, px]
+            ),
+
+        "mean":
+            float(
+                np.mean(matrix)
+            ),
+
+        "minimum":
+            float(
+                np.min(matrix)
+            ),
+
+        "maximum":
+            float(
+                np.max(matrix)
+            ),
+
+        "range":
+            float(
+                np.max(matrix)
+                -
+                np.min(matrix)
+            ),
+
+        "x":
+            px,
+
+        "y":
+            py
     }
 
 
@@ -1221,7 +1357,8 @@ with col1:
     </div>
 
     </div>
-    """, unsafe_allow_html=True)
+    """,
+    unsafe_allow_html=True)
 
     uploaded = st.file_uploader(
         "Upload a face image",
@@ -1248,7 +1385,8 @@ with col2:
     </div>
 
     </div>
-    """, unsafe_allow_html=True)
+    """,
+    unsafe_allow_html=True)
 
 
 if uploaded is not None:
@@ -1264,7 +1402,7 @@ else:
 
 original = resize_for_processing(
     original,
-    max_size=640
+    MAX_PROCESSING_SIZE
 )
 
 
@@ -1314,7 +1452,8 @@ if operation == "Template Matching":
     </div>
 
     </div>
-    """, unsafe_allow_html=True)
+    """,
+    unsafe_allow_html=True)
 
     template_uploaded = st.file_uploader(
         "Upload template image",
@@ -1335,7 +1474,7 @@ if operation == "Template Matching":
 
         template_image = resize_for_processing(
             template_image,
-            max_size=300
+            300
         )
 
         st.image(
@@ -1361,7 +1500,8 @@ elif operation == "FaceNet":
     </div>
 
     </div>
-    """, unsafe_allow_html=True)
+    """,
+    unsafe_allow_html=True)
 
     comparison_uploaded = st.file_uploader(
         "Upload comparison face image",
@@ -1382,7 +1522,7 @@ elif operation == "FaceNet":
 
         comparison_image = resize_for_processing(
             comparison_image,
-            max_size=640
+            MAX_PROCESSING_SIZE
         )
 
         st.image(
@@ -1391,6 +1531,10 @@ elif operation == "FaceNet":
             width=300
         )
 
+
+# ============================================================
+# OPERATION INFO
+# ============================================================
 
 operation_info = {
 
@@ -1401,7 +1545,7 @@ operation_info = {
         "Uses Haar-like features, integral images and a Haar Cascade classifier for face detection.",
 
     "DeepFace":
-        "Uses an actual deep-learning face analysis model for facial attributes and representation.",
+        "Uses an actual DeepFace deep-learning model for facial emotion analysis.",
 
     "FaceNet":
         "Generates actual FaceNet embeddings and compares two faces using vector similarity."
@@ -1418,7 +1562,28 @@ st.markdown(f"""
 </p>
 
 </div>
-""", unsafe_allow_html=True)
+""",
+unsafe_allow_html=True)
+
+
+# ============================================================
+# DEPLOYMENT NOTE FOR DEEPFACE
+# ============================================================
+
+if operation == "DeepFace":
+
+    st.markdown("""
+    <div class="warning-box">
+
+    <b>Deployment-safe DeepFace mode</b><br><br>
+
+    DeepFace uses the actual deep-learning emotion model.
+    The emotion model is loaded only when DeepFace
+    is selected, helping reduce deployment memory usage.
+
+    </div>
+    """,
+    unsafe_allow_html=True)
 
 
 # ============================================================
@@ -1497,8 +1662,8 @@ White Rectangle − Black Rectangle
 "definition":
 """
 DeepFace is a deep-learning based face-analysis framework.
-It performs actual facial representation and facial attribute
-analysis using pretrained deep-learning models.
+This deployment-safe version performs actual facial emotion
+analysis using the DeepFace emotion model.
 """,
 
 "formula":
@@ -1514,10 +1679,10 @@ Standard Deviation =
 """
 1. Obtain the input face image.
 2. Detect and align the face.
-3. Pass the face through the DeepFace models.
-4. Predict age, gender, emotion and race.
-5. Generate facial representation.
-6. Display the actual analysis results.
+3. Pass the face through the actual DeepFace emotion model.
+4. Predict the dominant facial emotion.
+5. Calculate image statistics.
+6. Display the actual analysis result.
 """
 },
 
@@ -1526,7 +1691,7 @@ Standard Deviation =
 "definition":
 """
 FaceNet represents a face as a numerical embedding vector.
-The actual FaceNet model generates a 128-dimensional representation
+The actual FaceNet model generates a face representation
 which can be compared using vector distance and similarity.
 """,
 
@@ -1546,13 +1711,15 @@ Euclidean Distance =
 3. Generate an embedding for the comparison image.
 4. Calculate cosine similarity.
 5. Calculate Euclidean distance.
-6. Perform actual face verification.
+6. Perform face verification using similarity threshold.
 """
 }
 
 }
 
-t = theory[operation]
+t = theory[
+    operation
+]
 
 st.markdown(f"""
 <div class="card">
@@ -1590,7 +1757,8 @@ st.markdown(f"""
 </div>
 
 </div>
-""", unsafe_allow_html=True)
+""",
+unsafe_allow_html=True)
 
 
 # ============================================================
@@ -1598,6 +1766,11 @@ st.markdown(f"""
 # ============================================================
 
 processing_error = None
+
+output = original.copy()
+
+result = {}
+
 
 try:
 
@@ -1612,7 +1785,9 @@ try:
 
         else:
 
-            output = original.copy()
+            st.info(
+                "Upload a template image to perform actual template matching."
+            )
 
             result = {
                 "score": 0.0,
@@ -1621,10 +1796,6 @@ try:
                 "width": 0,
                 "height": 0
             }
-
-            st.info(
-                "Upload a template image to perform actual template matching."
-            )
 
 
     elif operation == "Viola–Jones Algorithm":
@@ -1641,7 +1812,7 @@ try:
         )
 
 
-    else:
+    elif operation == "FaceNet":
 
         if comparison_image is not None:
 
@@ -1652,7 +1823,9 @@ try:
 
         else:
 
-            output = original.copy()
+            st.info(
+                "Upload a comparison image to perform actual FaceNet comparison."
+            )
 
             result = {
                 "dimension": 128,
@@ -1662,13 +1835,10 @@ try:
                 "mean": 0.0,
                 "std": 0.0,
                 "verified": False,
-                "threshold": None,
+                "threshold": 0.70,
                 "processing_time": 0.0
             }
 
-            st.info(
-                "Upload a comparison image to perform actual FaceNet comparison."
-            )
 
 except Exception as e:
 
@@ -1682,8 +1852,8 @@ except Exception as e:
 if processing_error:
 
     st.error(
-        "Processing error: " +
-        processing_error
+        "Processing error: "
+        + processing_error
     )
 
 
@@ -1758,8 +1928,13 @@ def calc_card(
     </div>
 
     </div>
-    """, unsafe_allow_html=True)
+    """,
+    unsafe_allow_html=True)
 
+
+# ============================================================
+# TEMPLATE CALCULATIONS
+# ============================================================
 
 if operation == "Template Matching":
 
@@ -1807,6 +1982,10 @@ if operation == "Template Matching":
             "Uploaded template height"
         )
 
+
+# ============================================================
+# VIOLA JONES CALCULATIONS
+# ============================================================
 
 elif operation == "Viola–Jones Algorithm":
 
@@ -1860,6 +2039,10 @@ elif operation == "Viola–Jones Algorithm":
         )
 
 
+# ============================================================
+# DEEPFACE CALCULATIONS
+# ============================================================
+
 elif operation == "DeepFace":
 
     c1, c2, c3 = st.columns(3)
@@ -1880,29 +2063,6 @@ elif operation == "DeepFace":
     with c2:
 
         calc_card(
-            "Age",
-            f"{result.get('age', 0):.1f}",
-            "DeepFace age model"
-        )
-
-    with c3:
-
-        calc_card(
-            "Gender",
-            str(
-                result.get(
-                    "gender",
-                    "Unknown"
-                )
-            ),
-            "DeepFace gender model"
-        )
-
-    c4, c5, c6 = st.columns(3)
-
-    with c4:
-
-        calc_card(
             "Emotion",
             str(
                 result.get(
@@ -1910,23 +2070,10 @@ elif operation == "DeepFace":
                     "Unknown"
                 )
             ),
-            "DeepFace emotion model"
+            "Actual DeepFace emotion model"
         )
 
-    with c5:
-
-        calc_card(
-            "Race",
-            str(
-                result.get(
-                    "race",
-                    "Unknown"
-                )
-            ),
-            "DeepFace race model"
-        )
-
-    with c6:
+    with c3:
 
         calc_card(
             "Face Confidence",
@@ -1934,9 +2081,9 @@ elif operation == "DeepFace":
             "DeepFace detector confidence"
         )
 
-    c7, c8, c9 = st.columns(3)
+    c4, c5, c6 = st.columns(3)
 
-    with c7:
+    with c4:
 
         calc_card(
             "Mean Intensity",
@@ -1944,7 +2091,7 @@ elif operation == "DeepFace":
             "μ = Σxᵢ / N"
         )
 
-    with c8:
+    with c5:
 
         calc_card(
             "Std. Deviation",
@@ -1952,7 +2099,7 @@ elif operation == "DeepFace":
             "σ = √[Σ(xᵢ−μ)²/N]"
         )
 
-    with c9:
+    with c6:
 
         calc_card(
             "Processing Time",
@@ -1968,18 +2115,20 @@ elif operation == "DeepFace":
     </div>
 
     <div class="info-text">
-    Emotion: {result.get("emotion", "Unknown")}
-    <br>
-    Gender: {result.get("gender", "Unknown")}
-    <br>
-    Race: {result.get("race", "Unknown")}
-    <br>
-    Estimated Age: {result.get("age", 0):.1f}
+
+    Dominant Emotion:
+    {result.get("emotion", "Unknown")}
+
     </div>
 
     </div>
-    """, unsafe_allow_html=True)
+    """,
+    unsafe_allow_html=True)
 
+
+# ============================================================
+# FACENET CALCULATIONS
+# ============================================================
 
 else:
 
@@ -2028,7 +2177,7 @@ else:
                 )
                 else "NOT MATCHED"
             ),
-            "Actual FaceNet verification"
+            "Actual FaceNet cosine-similarity verification"
         )
 
     with c5:
@@ -2050,7 +2199,7 @@ else:
         calc_card(
             "Verification Threshold",
             threshold_text,
-            "DeepFace FaceNet cosine threshold"
+            "FaceNet cosine similarity threshold"
         )
 
     c6, c7 = st.columns(2)
@@ -2079,25 +2228,29 @@ else:
     </div>
 
     <div class="info-text">
-    First 8 dimensions of the actual 128-dimensional
-    FaceNet representation:
+    First 8 dimensions of the actual FaceNet representation:
     </div>
 
     <div class="formula">
-    """ +
-    " &nbsp;&nbsp; ".join(
-        f"{v:.4f}"
-        for v in result.get(
-            "first",
-            np.zeros(8)
+    """,
+    unsafe_allow_html=True)
+
+    embedding_preview = result.get(
+        "first",
+        np.zeros(8)
+    )
+
+    st.markdown(
+        " &nbsp;&nbsp; ".join(
+            f"{v:.4f}"
+            for v in embedding_preview
         )
     )
-    +
-    """
-    </div>
 
-    </div>
-    """, unsafe_allow_html=True)
+    st.markdown(
+        "</div>",
+        unsafe_allow_html=True
+    )
 
 
 # ============================================================
@@ -2109,7 +2262,9 @@ st.markdown(
     unsafe_allow_html=True
 )
 
-gray = gray_array(original)
+gray = gray_array(
+    original
+)
 
 h, w = gray.shape
 
@@ -2120,7 +2275,10 @@ with px_col:
     px = st.slider(
         "Select X pixel",
         0,
-        max(0, w - 1),
+        max(
+            0,
+            w - 1
+        ),
         w // 2
     )
 
@@ -2129,7 +2287,10 @@ with py_col:
     py = st.slider(
         "Select Y pixel",
         0,
-        max(0, h - 1),
+        max(
+            0,
+            h - 1
+        ),
         h // 2
     )
 
@@ -2191,12 +2352,15 @@ Actual grayscale values around the selected pixel.
 </div>
 
 </div>
-""", unsafe_allow_html=True)
+""",
+unsafe_allow_html=True)
 
 
 matrix = pixel["matrix"]
 
-matrix_html = '<div class="pixel-box">'
+matrix_html = (
+    '<div class="pixel-box">'
+)
 
 for row in matrix:
 
@@ -2227,7 +2391,9 @@ for row in matrix:
             f'</div>'
         )
 
-matrix_html += '</div>'
+matrix_html += (
+    '</div>'
+)
 
 st.markdown(
     matrix_html,
@@ -2271,13 +2437,11 @@ elif operation == "Viola–Jones Algorithm":
 elif operation == "DeepFace":
 
     summary = (
-        f"DeepFace detected "
+        f"DeepFace performed actual emotion analysis "
+        f"and detected "
         f"{result.get('faces', 0)} face region(s). "
-        f"The actual facial analysis estimated age "
-        f"{result.get('age', 0):.1f}, gender "
-        f"{result.get('gender', 'Unknown')}, "
-        f"emotion {result.get('emotion', 'Unknown')}, "
-        f"and race {result.get('race', 'Unknown')}."
+        f"The dominant emotion was "
+        f"{result.get('emotion', 'Unknown')}."
     )
 
 
@@ -2308,7 +2472,8 @@ st.markdown(f"""
 </div>
 
 </div>
-""", unsafe_allow_html=True)
+""",
+unsafe_allow_html=True)
 
 
 # ============================================================
